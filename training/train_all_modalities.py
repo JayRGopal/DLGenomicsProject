@@ -48,13 +48,13 @@ class OvOAttention(layers.Layer):
         context = tf.matmul(attn, tf.squeeze(main, 2))
         return context, attn
 
-class MultiHeadAttention(layers.Layer):
+class CustomMultiHeadAttention(layers.Layer):
     """
     TensorFlow layer that implements Multi-Head attention mechanism.
     """
 
     def __init__(self, d_model=512, num_heads=8):
-        super(MultiHeadAttention, self).__init__()
+        super(CustomMultiHeadAttention, self).__init__()
         self.d_head = d_model // num_heads
         self.d_model = d_model
         self.num_heads = num_heads
@@ -236,10 +236,10 @@ def ovo_modal_attention(x, other_modalities):
     # Prepare other modalities
     processed_others = [tf.expand_dims(modality, axis=1) for modality in other_modalities]
 
-    # Initialize the MultiHeadAttention layer
-    mha = MultiHeadAttention(num_heads=4, key_dim=50)
+    # Initialize the CustomMultiHeadAttention layer
+    mha = CustomMultiHeadAttention(num_heads=4, key_dim=50)
 
-    # Apply MultiHeadAttention using OvOAttention
+    # Apply CustomMultiHeadAttention using OvOAttention
     a1 = mha(processed_others, x)
     a1 = a1[:, 0, :]
 
