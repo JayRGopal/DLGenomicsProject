@@ -17,6 +17,89 @@ from sklearn.metrics import precision_recall_fscore_support
 from sklearn.metrics import precision_recall_curve
 
 
+# OVO Attention
+from tensorflow.keras import layers
+
+class OvOAttention(layers.Layer):
+    """
+    TensorFlow layer that implements One-vs-Others attention mechanism.
+    """
+
+    def __init__(self):
+        super(OvOAttention, self).__init__()
+
+    def call(self, others, main, W):
+        """
+        Compute context vector and attention weights using One-vs-Others attention.
+
+        Args:
+            others: List of tensors of shape (batch_size, num_heads, seq_len, embed_dim) representing
+                    the other modality inputs.
+            main: A tensor of shape (batch_size, num_heads, seq_len, embed_dim) representing the main modality input.
+            W: A learnable parameter tensor of shape (d_head, d_head) representing the weight matrix.
+
+        Returns:
+            A tensor of shape (batch_size, embed_dim) representing the context vector.
+            A tensor of shape (batch_size, num_heads, seq_len) representing the attention weights.
+        """
+        mean = tf.reduce_mean(tf.stack(others, axis=0), axis=0)
+        score = tf.matmul(tf.squeeze(mean, 2), W) @ tf.transpose(tf.squeeze(main, 2), perm=[0, 2, 1])
+        attn = tf.nn.softmax(score, axis=-1)
+        context = tf.matmul(attn, tf.squeeze(main, 2))
+        return context, attn
+
+class MultiHeadAttention(layers.Layer):
+    """
+    TensorFlow layer that implements Multi-Head attention mechanism.
+    """
+
+    def __init__(self, d_model=512, num_heads=8):
+        super(MultiHeadAttention, self).__init__()
+        self.d_head = d_model // num_heads
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.ovo_attn = OvOAttention()
+        self.query_proj = layers.Dense(self.d_head * num_heads)
+        self.key_proj = layers.Dense(self.d_head * num_heads)
+        self.value_proj = layers.Dense(self.d_head * num_heads)
+        self.W = self.add_weight(shape=(self.d_head, self.d_head), initializer="random_normal")
+
+    def call(self, others, main):
+        """
+        Compute context vector using Multi-Head attention.
+
+        Args:
+            others: List of tensors of shape (batch_size, num_heads, seq_len, embed_dim) representing
+                    the other modality inputs.
+            main: A tensor of shape (batch_size, num_heads, seq_len, embed_dim) representing the main modality input.
+
+        Returns:
+            A tensor of shape (batch_size, seq_len, embed_dim) representing the context vector.
+        """
+        batch_size = tf.shape(main)[0]
+        main = tf.expand_dims(main, 1)
+        bsz, tgt_len, embed_dim = tf.shape(main)
+        src_len, _, _ = tf.shape(main)
+        
+        main = tf.reshape(main, (tgt_len, bsz * self.num_heads, self.d_head))
+        main = tf.transpose(main, perm=[1, 0, 2])
+        main = tf.reshape(main, (bsz, self.num_heads, tgt_len, self.d_head))
+        processed_others = []
+        for mod in others:
+            mod = tf.expand_dims(mod, 1)
+            mod = tf.reshape(mod, (tgt_len, bsz * self.num_heads, self.d_head))
+            mod = tf.transpose(mod, perm=[1, 0, 2])
+            mod = tf.reshape(mod, (bsz, self.num_heads, tgt_len, self.d_head))
+            processed_others.append(mod)
+
+        context, attn = self.ovo_attn(processed_others, main, self.W)
+        context = tf.reshape(context, (bsz * tgt_len, embed_dim))
+        context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
+
+        return context
+
+
+
 config = tf.compat.v1.ConfigProto()
 config.gpu_options.allow_growth=True
 sess = tf.compat.v1.Session(config=config)
@@ -159,6 +242,7 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img):
  
         
     ########### Attention Layer ############
+
         
     ## Cross Modal Bi-directional Attention ##
 
