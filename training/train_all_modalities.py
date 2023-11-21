@@ -439,8 +439,8 @@ if __name__=="__main__":
     m_a = {}
     seeds = random.sample(range(1, 200), 5)
     for s in seeds:
-        acc, bs_, lr_, e_ , seed= train('MM_SA_BA', 32, 50, 0.001, s)
-        m_a[acc] = ('MM_SA_BA', acc, bs_, lr_, e_, seed)
+        acc, bs_, lr_, e_ , seed= train('MM_OVO', 32, 50, 0.001, s)
+        m_a[acc] = ('MM_OVO', acc, bs_, lr_, e_, seed)
     print(m_a)
     print ('-'*55)
     max_acc = max(m_a, key=float)
