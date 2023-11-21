@@ -346,7 +346,7 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img):
 
 
 
-def train(mode, batch_size, epochs, learning_rate, seed):
+def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
  
     train_clinical = pd.read_csv("X_train_clinical.csv").drop("Unnamed: 0", axis=1).values
@@ -392,6 +392,9 @@ def train(mode, batch_size, epochs, learning_rate, seed):
     test_predictions = model.predict([test_clinical, test_snp, test_img])
     cr, precision_d, recall_d, thres = calc_confusion_matrix(test_predictions, test_label, mode, learning_rate, batch_size, epochs)
     
+    # Save model
+    model.save_weights(save_path)
+
     
     """
     plt.clf()
@@ -435,11 +438,19 @@ def train(mode, batch_size, epochs, learning_rate, seed):
     
     
 if __name__=="__main__":
+
+    # Model saving
+    current_script_path = os.path.dirname(os.path.realpath(__file__))
+    parent_directory = os.path.abspath(os.path.join(current_script_path, os.pardir))
+    checkpoints_directory = os.path.join(parent_directory, 'checkpoints')
+    os.makedirs(checkpoints_directory, exist_ok=True)
+    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model.h5')
+
     
     m_a = {}
     seeds = random.sample(range(1, 200), 5)
     for s in seeds:
-        acc, bs_, lr_, e_ , seed= train('MM_OVO', 32, 50, 0.001, s)
+        acc, bs_, lr_, e_ , seed= train('MM_OVO', 32, 50, 0.001, s, MODEL_SAVE_PATH)
         m_a[acc] = ('MM_OVO', acc, bs_, lr_, e_, seed)
     print(m_a)
     print ('-'*55)
