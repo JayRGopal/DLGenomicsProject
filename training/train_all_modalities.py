@@ -219,6 +219,38 @@ def cross_modal_attention(x, y):
     a2 = a2[:,0,:]
     return concatenate([a1, a2])
 
+def ovo_modal_attention(x, other_modalities):
+    """
+    Function to compute attention using One-vs-Others attention mechanism.
+
+    Args:
+        x: A tensor representing the main modality input.
+        other_modalities: A list of tensors representing other modality inputs.
+
+    Returns:
+        Tensor: The result of applying One-vs-Others attention mechanism.
+    """
+    # Expand the dimensions of the main modality input
+    x = tf.expand_dims(x, axis=1)
+
+    # Prepare other modalities
+    processed_others = [tf.expand_dims(modality, axis=1) for modality in other_modalities]
+
+    # Initialize the MultiHeadAttention layer
+    mha = MultiHeadAttention(num_heads=4, key_dim=50)
+
+    # Apply MultiHeadAttention using OvOAttention
+    a1 = mha(processed_others, x)
+    a1 = a1[:, 0, :]
+
+    # For symmetry, you might also want to compute the attention with x being treated as the other modality
+    # This would be similar to how cross-modal attention was computed in both directions
+    # If not needed, you can comment out the following lines
+    a2 = mha([x] * len(other_modalities), other_modalities[0])  # Assuming all other modalities are of the same shape
+    a2 = a2[:, 0, :]
+
+    # Concatenate the results
+    return tf.concat([a1, a2], axis=1)
 
 def self_attention(x):
     x = tf.expand_dims(x, axis=1)
@@ -243,6 +275,21 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img):
         
     ########### Attention Layer ############
 
+    ## One-Versus-Others Attention ##
+
+    if mode == 'MM_OVO':
+        main_1 = dense_img
+        other_modalities_1 = [dense_clinical, dense_snp]
+        main_2 = dense_clinical
+        other_modalities_2 = [dense_img, dense_snp]
+        main_3 = dense_snp
+        other_modalities_3 = [dense_img, dense_clinical]
+
+        out_1 = ovo_modal_attention(main_1, other_modalities_1)
+        out_2 = ovo_modal_attention(main_2, other_modalities_2)
+        out_3 = ovo_modal_attention(main_3, other_modalities_3)
+
+        merged = concatenate([out_1, out_2, out_3])
         
     ## Cross Modal Bi-directional Attention ##
 
