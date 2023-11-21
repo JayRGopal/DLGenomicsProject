@@ -64,7 +64,7 @@ class CustomMultiHeadAttention(layers.Layer):
         self.value_proj = layers.Dense(self.d_head * num_heads)
         self.W = self.add_weight(shape=(self.d_head, self.d_head), initializer="random_normal")
 
-    def call(self, others, main):
+    def call(self, others, main, return_attention_weights=False):
         """
         Compute context vector using Multi-Head attention.
 
@@ -96,6 +96,8 @@ class CustomMultiHeadAttention(layers.Layer):
         context = tf.reshape(context, (bsz * tgt_len, embed_dim))
         context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
 
+        if return_attention_weights:
+            return context, attn
         return context
 
 
@@ -259,7 +261,7 @@ def self_attention(x):
     return attention
     
 
-def multi_modal_model(mode, train_clinical, train_snp, train_img):
+def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attention_weights=False):
     
     in_clinical = Input(shape=(train_clinical.shape[1]))
     
@@ -285,11 +287,19 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img):
         main_3 = dense_snp
         other_modalities_3 = [dense_img, dense_clinical]
 
-        out_1 = ovo_modal_attention(main_1, other_modalities_1)
-        out_2 = ovo_modal_attention(main_2, other_modalities_2)
-        out_3 = ovo_modal_attention(main_3, other_modalities_3)
+        if return_attention_weights:
+            out_1, attn_weights_1 = ovo_modal_attention(main_1, other_modalities_1, return_attention_weights=True)
+            out_2, attn_weights_2 = ovo_modal_attention(main_2, other_modalities_2, return_attention_weights=True)
+            out_3, attn_weights_3 = ovo_modal_attention(main_3, other_modalities_3, return_attention_weights=True)
+        else:
+            out_1 = ovo_modal_attention(main_1, other_modalities_1)
+            out_2 = ovo_modal_attention(main_2, other_modalities_2)
+            out_3 = ovo_modal_attention(main_3, other_modalities_3)
 
         merged = concatenate([out_1, out_2, out_3])
+
+        if return_attention_weights:
+            return model, [attn_weights_1, attn_weights_2, attn_weights_3]
         
     ## Cross Modal Bi-directional Attention ##
 
@@ -345,6 +355,15 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img):
     return model
 
 
+def visualize_attention_weights(attention_weights, title):
+    # Assume attention_weights is a list of numpy arrays
+    for i, attn in enumerate(attention_weights):
+        plt.figure(figsize=(10, 4))
+        sns.heatmap(attn, cmap='viridis')
+        plt.title(f'{title} - Modality {i+1}')
+        plt.xlabel('Sequence Length')
+        plt.ylabel('Heads')
+        plt.show()
 
 def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
@@ -369,9 +388,12 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     d_class_weights = dict(enumerate(class_weights))
     
     # compile model #
-    model = multi_modal_model(mode, train_clinical, train_snp, train_img)
+    model, attention_weights = multi_modal_model('MM_OVO', train_clinical, train_snp, train_img, return_attention_weights=True)
+
     model.compile(optimizer=Adam(learning_rate = learning_rate), loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     
+    # Visualize attention weights
+    visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
 
     # summarize results
     history = model.fit([train_clinical,
