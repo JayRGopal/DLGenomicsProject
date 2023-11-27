@@ -15,10 +15,10 @@ from tensorflow.keras.utils import to_categorical
 import seaborn as sns
 from sklearn.metrics import precision_recall_fscore_support
 from sklearn.metrics import precision_recall_curve
-
-
-# OVO Attention
 from tensorflow.keras import layers
+
+
+########### CSCI 2952G: Added OVO Attention ############    
 
 class OvOAttention(layers.Layer):
     """
@@ -99,6 +99,9 @@ class CustomMultiHeadAttention(layers.Layer):
         if return_attention_weights:
             return context, attn
         return context
+
+
+
 
 
 
@@ -221,6 +224,9 @@ def cross_modal_attention(x, y):
     a2 = a2[:,0,:]
     return concatenate([a1, a2])
 
+
+########### CSCI 2952G: Utilize OVO Attention Class ############    
+
 def ovo_modal_attention(x, other_modalities):
     """
     Function to compute attention using One-vs-Others attention mechanism.
@@ -254,6 +260,8 @@ def ovo_modal_attention(x, other_modalities):
     # Concatenate the results
     return tf.concat([a1, a2], axis=1)
 
+
+
 def self_attention(x):
     x = tf.expand_dims(x, axis=1)
     attention = MultiHeadAttention(num_heads = 4, key_dim=50)(x, x)
@@ -276,7 +284,8 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
  
         
     ########### Attention Layer ############
-
+    
+    ########### CSCI 2952G: Add OVO Attention Mode ############    
     ## One-Versus-Others Attention ##
 
     if mode == 'MM_OVO':
@@ -286,7 +295,8 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
         other_modalities_2 = [dense_img, dense_snp]
         main_3 = dense_snp
         other_modalities_3 = [dense_img, dense_clinical]
-
+        
+        ########### CSCI 2952G: Add Attention Weight Extraction ############
         if return_attention_weights:
             out_1, attn_weights_1 = ovo_modal_attention(main_1, other_modalities_1, return_attention_weights=True)
             out_2, attn_weights_2 = ovo_modal_attention(main_2, other_modalities_2, return_attention_weights=True)
@@ -301,6 +311,8 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
         if return_attention_weights:
             return model, [attn_weights_1, attn_weights_2, attn_weights_3]
         
+    
+    
     ## Cross Modal Bi-directional Attention ##
 
     if mode == 'MM_BA':
@@ -355,15 +367,6 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
     return model
 
 
-def visualize_attention_weights(attention_weights, title):
-    # Assume attention_weights is a list of numpy arrays
-    for i, attn in enumerate(attention_weights):
-        plt.figure(figsize=(10, 4))
-        sns.heatmap(attn, cmap='viridis')
-        plt.title(f'{title} - Modality {i+1}')
-        plt.xlabel('Sequence Length')
-        plt.ylabel('Heads')
-        plt.show()
 
 def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
@@ -458,7 +461,89 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
     return acc, batch_size, learning_rate, epochs, seed
     
-    
+
+########### CSCI 2952G: Explainability Core ############    
+
+
+def visualize_attention_weights(attention_weights, title):
+    """
+    Assumes attention_weights is a list of numpy arrays
+    """
+
+    # Loop through modalities
+    for i, attn in enumerate(attention_weights):
+        plt.figure(figsize=(10, 4))
+        # Make heatmap of attention weights
+        sns.heatmap(attn, cmap='viridis')
+        plt.title(f'{title} - Modality {i+1}')
+        plt.xlabel('Sequence Length')
+        plt.ylabel('Heads')
+        plt.show()
+
+
+def compute_multi_modal_saliency_maps(model, inputs, class_idx):
+    """
+    Compute saliency maps for all inputs in a multi-modal model.
+
+    Args:
+    model: The trained multi-modal model.
+    inputs: List of inputs corresponding to each modality (clinical, snp, mri).
+    class_idx: The class index for which the saliency maps are computed.
+
+    Returns:
+    List of numpy arrays: The computed saliency maps for each modality.
+    """
+    with tf.GradientTape() as tape:
+        tape.watch(inputs)
+        predictions = model(inputs)
+        loss = predictions[:, class_idx]
+
+    gradients = tape.gradient(loss, inputs)
+    saliency_maps = [tf.abs(grad).numpy() for grad in gradients]
+    return saliency_maps
+
+
+def maximize_multi_modal_activation(model, target_layer, input_shapes, iterations=30, step=1.0):
+    """
+    Generate inputs for each modality that maximize the activation of a specified layer in a multi-modal model.
+
+    Args:
+    model: The trained multi-modal model.
+    target_layer: The name of the layer to be maximized.
+    input_shapes: List of shapes for each modality input.
+    iterations: Number of gradient ascent steps.
+    step: Step size for gradient ascent.
+
+    Returns:
+    List of numpy arrays: The generated inputs for each modality.
+    """
+    # Initialize random inputs for each modality
+    input_data = [tf.random.uniform((1, *shape), 0, 1) for shape in input_shapes]
+
+    # Retrieve the symbolic output of the target layer
+    layer_output = model.get_layer(target_layer).output
+
+    for _ in range(iterations):
+        with tf.GradientTape() as tape:
+            tape.watch(input_data)
+            model_output = model(input_data)
+            # Target the activation of the specific layer
+            activation = tf.reduce_mean(model_output[layer_output])
+
+        # Compute gradients for each modality
+        grads = tape.gradient(activation, input_data)
+
+        # Update each modality input with normalized gradients
+        for i in range(len(input_data)):
+            normalized_grads = grads[i] / (tf.sqrt(tf.reduce_mean(tf.square(grads[i]))) + 1e-5)
+            input_data[i] += step * normalized_grads
+
+    # Decode the resulting input data for each modality
+    maximized_activation_inputs = [data.numpy()[0] for data in input_data]
+    return maximized_activation_inputs
+
+
+
 if __name__=="__main__":
 
     # Model saving
