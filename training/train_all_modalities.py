@@ -16,6 +16,8 @@ import seaborn as sns
 from sklearn.metrics import precision_recall_fscore_support
 from sklearn.metrics import precision_recall_curve
 from tensorflow.keras import layers
+import pickle
+import pdb
 
 
 ########### CSCI 2952G: Added OVO Attention ############    
@@ -227,16 +229,18 @@ def cross_modal_attention(x, y):
 
 ########### CSCI 2952G: Utilize OVO Attention Class ############    
 
-def ovo_modal_attention(x, other_modalities):
+def ovo_modal_attention(x, other_modalities, return_attention_weights=False):
     """
     Function to compute attention using One-vs-Others attention mechanism.
 
     Args:
         x: A tensor representing the main modality input.
         other_modalities: A list of tensors representing other modality inputs.
+        return_attention_weights (bool): If True, returns attention weights along with the outputs.
 
     Returns:
         Tensor: The result of applying One-vs-Others attention mechanism.
+        Tensor (optional): The attention weights if return_attention_weights is True.
     """
     # Expand the dimensions of the main modality input
     x = tf.expand_dims(x, axis=1)
@@ -245,21 +249,23 @@ def ovo_modal_attention(x, other_modalities):
     processed_others = [tf.expand_dims(modality, axis=1) for modality in other_modalities]
 
     # Initialize the CustomMultiHeadAttention layer
-    mha = CustomMultiHeadAttention(num_heads=4, key_dim=50)
+    mha = CustomMultiHeadAttention(num_heads=4)
 
     # Apply CustomMultiHeadAttention using OvOAttention
-    a1 = mha(processed_others, x)
+    a1, weights1 = mha(processed_others, x, return_attention_weights=True)
     a1 = a1[:, 0, :]
 
-    # For symmetry, you might also want to compute the attention with x being treated as the other modality
-    # This would be similar to how cross-modal attention was computed in both directions
-    # If not needed, you can comment out the following lines
-    a2 = mha([x] * len(other_modalities), other_modalities[0])  # Assuming all other modalities are of the same shape
+    # For symmetry, compute the attention with x being treated as the other modality
+    a2, weights2 = mha([x] * len(other_modalities), other_modalities[0], return_attention_scores=True)
     a2 = a2[:, 0, :]
 
     # Concatenate the results
-    return tf.concat([a1, a2], axis=1)
+    output = tf.concat([a1, a2], axis=1)
 
+    if return_attention_weights:
+        return output, (weights1, weights2)
+    else:
+        return output
 
 
 def self_attention(x):
@@ -370,34 +376,46 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
 
 def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
- 
-    train_clinical = pd.read_csv("X_train_clinical.csv").drop("Unnamed: 0", axis=1).values
-    test_clinical= pd.read_csv("X_test_clinical.csv").drop("Unnamed: 0", axis=1).values
+    
+    train_clinical = pickle.load(open("../ADNI/X_train_clinical.pkl", 'rb')).values
+    test_clinical= pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb')).values
 
     
-    train_snp = pd.read_csv("X_train_snp.csv").drop("Unnamed: 0", axis=1).values
-    test_snp = pd.read_csv("X_test_snp.csv").drop("Unnamed: 0", axis=1).values
+    train_snp = pickle.load(open("../ADNI/X_train_snp.pkl", 'rb')).values
+    test_snp = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).values
 
     
-    train_img= make_img("X_train_img.pkl")
-    test_img= make_img("X_test_img.pkl")
+    train_img= make_img("../ADNI/X_train_img.pkl")
+    test_img= make_img("../ADNI/X_test_img.pkl")
 
     
-    train_label= pd.read_csv("y_train.csv").drop("Unnamed: 0", axis=1).values.astype("int").flatten()
-    test_label= pd.read_csv("y_test.csv").drop("Unnamed: 0", axis=1).values.astype("int").flatten()
+    train_label= pickle.load(open("../ADNI_Label_Matching/img_y_train.pkl", 'rb')).values.astype("int").flatten()
+    test_label= pickle.load(open("../ADNI_Label_Matching/img_y_test.pkl", 'rb')).values.astype("int").flatten()
+
+    # DEBUG - SUBSET OF TRAINING TO MATCH LABELS
+    match_indices = np.load('../ADNI_Label_Matching/training_indices_to_keep.npy')
+    train_clinical = train_clinical[match_indices]
+    train_snp = train_snp[match_indices]
+    train_img = train_img[match_indices]
+    train_label= pickle.load(open("../ADNI_Label_Matching/labels_training_temp.pkl", 'rb')).astype("int").flatten()
+    
+
+    # END DEBUG
+
 
     reset_random_seeds(seed)
     class_weights = compute_class_weight(class_weight = 'balanced',classes = np.unique(train_label),y = train_label)
     d_class_weights = dict(enumerate(class_weights))
     
     # compile model #
+    pdb.set_trace()
     model, attention_weights = multi_modal_model('MM_OVO', train_clinical, train_snp, train_img, return_attention_weights=True)
 
     model.compile(optimizer=Adam(learning_rate = learning_rate), loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     
     # Visualize attention weights
     visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
-
+    pdb.set_trace()
     # summarize results
     history = model.fit([train_clinical,
                          train_snp,
@@ -410,6 +428,7 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
                         verbose=1)
                         
                 
+    pdb.set_trace()
 
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
     
@@ -419,7 +438,7 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
     # Save model
     model.save_weights(save_path)
-
+    pdb.set_trace()
     
     """
     plt.clf()
