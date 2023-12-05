@@ -107,6 +107,8 @@ class CustomMultiHeadAttention(layers.Layer):
         mod = tf.reshape(mod, (bsz, self.num_heads, tgt_len, self.d_head))
         processed_others.append(mod)
 
+        pdb.set_trace()
+
         context, attn = self.ovo_attn(processed_others, main, self.W)
         context = tf.reshape(context, (bsz * tgt_len, embed_dim))
         context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
@@ -399,31 +401,29 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     train_snp = pickle.load(open("../ADNI/X_train_snp.pkl", 'rb')).values
     test_snp = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).values
 
-    
     train_img= make_img("../ADNI/X_train_img.pkl")
     test_img= make_img("../ADNI/X_test_img.pkl")
 
-    print("Training data shapes: ")
-    print(train_clinical.shape)
-    print(train_snp.shape)
-    print(train_img.shape)
-    print()
-
-    # train_label= pickle.load(open("../ADNI_Label_Matching/img_y_train.pkl", 'rb')).values.astype("int").flatten()
-    # test_label= pickle.load(open("../ADNI_Label_Matching/img_y_test.pkl", 'rb')).values.astype("int").flatten()
-    train_label = np.zeros(215)
-    test_label = np.zeros(24)
-
-    # DEBUG - SUBSET OF TRAINING TO MATCH LABELS
-    # match_indices = np.load('../ADNI_Label_Matching/training_indices_to_keep.npy')
-    # train_clinical = train_clinical[match_indices]
-    # train_snp = train_snp[match_indices]
-    # train_img = train_img[match_indices]
-    # train_label= pickle.load(open("../ADNI_Label_Matching/labels_training_temp.pkl", 'rb')).astype("int").flatten()
+    train_label= pickle.load(open("../ADNI/img_y_train.pkl", 'rb')).values.astype("int").flatten()
+    test_label= pickle.load(open("../ADNI/img_y_test.pkl", 'rb')).values.astype("int").flatten()
     
 
-    # END DEBUG
+    print("Training data shapes: ")
+    print('Clinical: ', train_clinical.shape)
+    print('SNP: ', train_snp.shape)
+    print('Image: ', train_img.shape)
+    print('Labels: ', train_label.shape)
+    print()
 
+    print("Testing data shapes: ")
+    print('Clinical: ', test_clinical.shape)
+    print('SNP: ', test_snp.shape)
+    print('Image: ', test_img.shape)
+    print('Labels: ', test_label.shape)
+    print()
+
+    # train_label = np.zeros(215)
+    # test_label = np.zeros(24)
 
     reset_random_seeds(seed)
     class_weights = compute_class_weight(class_weight = 'balanced',classes = np.unique(train_label),y = train_label)
