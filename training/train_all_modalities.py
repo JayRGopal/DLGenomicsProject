@@ -20,6 +20,7 @@ import pickle
 import pdb
 
 
+
 ########### CSCI 2952G: Added OVO Attention ############    
 
 class OvOAttention(layers.Layer):
@@ -55,7 +56,7 @@ class CustomMultiHeadAttention(layers.Layer):
     TensorFlow layer that implements Multi-Head attention mechanism.
     """
 
-    def __init__(self, d_model=512, num_heads=8):
+    def __init__(self, d_model=50, num_heads=5):
         super(CustomMultiHeadAttention, self).__init__()
         self.d_head = d_model // num_heads
         self.d_model = d_model
@@ -80,19 +81,31 @@ class CustomMultiHeadAttention(layers.Layer):
         """
         batch_size = tf.shape(main)[0]
         main = tf.expand_dims(main, 1)
-        bsz, tgt_len, embed_dim = tf.shape(main)
-        src_len, _, _ = tf.shape(main)
-        
+        sh = tf.shape(main)
+        bsz = sh[0]
+        tgt_len = sh[1]
+        embed_dim = sh[2]
+        #bsz, tgt_len, embed_dim = tf.shape(main)
+        src_len = tf.shape(main)[0]
+
         main = tf.reshape(main, (tgt_len, bsz * self.num_heads, self.d_head))
         main = tf.transpose(main, perm=[1, 0, 2])
         main = tf.reshape(main, (bsz, self.num_heads, tgt_len, self.d_head))
+
         processed_others = []
-        for mod in others:
-            mod = tf.expand_dims(mod, 1)
-            mod = tf.reshape(mod, (tgt_len, bsz * self.num_heads, self.d_head))
-            mod = tf.transpose(mod, perm=[1, 0, 2])
-            mod = tf.reshape(mod, (bsz, self.num_heads, tgt_len, self.d_head))
-            processed_others.append(mod)
+        mod = others[0]
+        mod = tf.expand_dims(mod, 1)
+        mod = tf.reshape(mod, (tgt_len, bsz * self.num_heads, self.d_head))
+        mod = tf.transpose(mod, perm=[1, 0, 2])
+        mod = tf.reshape(mod, (bsz, self.num_heads, tgt_len, self.d_head))
+        processed_others.append(mod)
+
+        mod = others[1]
+        mod = tf.expand_dims(mod, 1)
+        mod = tf.reshape(mod, (tgt_len, bsz * self.num_heads, self.d_head))
+        mod = tf.transpose(mod, perm=[1, 0, 2])
+        mod = tf.reshape(mod, (bsz, self.num_heads, tgt_len, self.d_head))
+        processed_others.append(mod)
 
         context, attn = self.ovo_attn(processed_others, main, self.W)
         context = tf.reshape(context, (bsz * tgt_len, embed_dim))
@@ -228,7 +241,6 @@ def cross_modal_attention(x, y):
 
 
 ########### CSCI 2952G: Utilize OVO Attention Class ############    
-
 def ovo_modal_attention(x, other_modalities, return_attention_weights=False):
     """
     Function to compute attention using One-vs-Others attention mechanism.
@@ -249,14 +261,14 @@ def ovo_modal_attention(x, other_modalities, return_attention_weights=False):
     processed_others = [tf.expand_dims(modality, axis=1) for modality in other_modalities]
 
     # Initialize the CustomMultiHeadAttention layer
-    mha = CustomMultiHeadAttention(num_heads=4)
+    mha = CustomMultiHeadAttention(num_heads=5)
 
     # Apply CustomMultiHeadAttention using OvOAttention
     a1, weights1 = mha(processed_others, x, return_attention_weights=True)
     a1 = a1[:, 0, :]
 
     # For symmetry, compute the attention with x being treated as the other modality
-    a2, weights2 = mha([x] * len(other_modalities), other_modalities[0], return_attention_scores=True)
+    a2, weights2 = mha([x] * len(other_modalities), other_modalities[0], return_attention_weights=True)
     a2 = a2[:, 0, :]
 
     # Concatenate the results
@@ -314,14 +326,13 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
 
         merged = concatenate([out_1, out_2, out_3])
 
-        if return_attention_weights:
-            return model, [attn_weights_1, attn_weights_2, attn_weights_3]
+
         
     
     
     ## Cross Modal Bi-directional Attention ##
 
-    if mode == 'MM_BA':
+    elif mode == 'MM_BA':
             
         vt_att = cross_modal_attention(dense_img, dense_clinical)
         av_att = cross_modal_attention(dense_snp, dense_img)
@@ -369,6 +380,10 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
         
     output = Dense(3, activation='softmax')(merged)
     model = Model([in_clinical, in_snp, in_img], output)        
+
+    # Only for OVO Attention
+    if return_attention_weights:
+        return model, [attn_weights_1, attn_weights_2, attn_weights_3]
         
     return model
 
@@ -388,16 +403,23 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     train_img= make_img("../ADNI/X_train_img.pkl")
     test_img= make_img("../ADNI/X_test_img.pkl")
 
-    
-    train_label= pickle.load(open("../ADNI_Label_Matching/img_y_train.pkl", 'rb')).values.astype("int").flatten()
-    test_label= pickle.load(open("../ADNI_Label_Matching/img_y_test.pkl", 'rb')).values.astype("int").flatten()
+    print("Training data shapes: ")
+    print(train_clinical.shape)
+    print(train_snp.shape)
+    print(train_img.shape)
+    print()
+
+    # train_label= pickle.load(open("../ADNI_Label_Matching/img_y_train.pkl", 'rb')).values.astype("int").flatten()
+    # test_label= pickle.load(open("../ADNI_Label_Matching/img_y_test.pkl", 'rb')).values.astype("int").flatten()
+    train_label = np.zeros(215)
+    test_label = np.zeros(24)
 
     # DEBUG - SUBSET OF TRAINING TO MATCH LABELS
-    match_indices = np.load('../ADNI_Label_Matching/training_indices_to_keep.npy')
-    train_clinical = train_clinical[match_indices]
-    train_snp = train_snp[match_indices]
-    train_img = train_img[match_indices]
-    train_label= pickle.load(open("../ADNI_Label_Matching/labels_training_temp.pkl", 'rb')).astype("int").flatten()
+    # match_indices = np.load('../ADNI_Label_Matching/training_indices_to_keep.npy')
+    # train_clinical = train_clinical[match_indices]
+    # train_snp = train_snp[match_indices]
+    # train_img = train_img[match_indices]
+    # train_label= pickle.load(open("../ADNI_Label_Matching/labels_training_temp.pkl", 'rb')).astype("int").flatten()
     
 
     # END DEBUG
@@ -409,12 +431,13 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
     # compile model #
     pdb.set_trace()
-    model, attention_weights = multi_modal_model('MM_OVO', train_clinical, train_snp, train_img, return_attention_weights=True)
+    #model, attention_weights = multi_modal_model(mode, train_clinical, train_snp, train_img, return_attention_weights=True)
+    model = multi_modal_model(mode, train_clinical, train_snp, train_img, return_attention_weights=False)
 
     model.compile(optimizer=Adam(learning_rate = learning_rate), loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     
     # Visualize attention weights
-    visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
+    #visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
     pdb.set_trace()
     # summarize results
     history = model.fit([train_clinical,
@@ -490,10 +513,12 @@ def visualize_attention_weights(attention_weights, title):
     """
 
     # Loop through modalities
+    print(type(attention_weights))
     for i, attn in enumerate(attention_weights):
+        print(attn)
         plt.figure(figsize=(10, 4))
         # Make heatmap of attention weights
-        sns.heatmap(attn, cmap='viridis')
+        sns.heatmap(attn.numpy(), cmap='viridis')
         plt.title(f'{title} - Modality {i+1}')
         plt.xlabel('Sequence Length')
         plt.ylabel('Heads')
@@ -564,6 +589,7 @@ def maximize_multi_modal_activation(model, target_layer, input_shapes, iteration
 
 
 if __name__=="__main__":
+    tf.config.experimental_run_functions_eagerly(True)
 
     # Model saving
     current_script_path = os.path.dirname(os.path.realpath(__file__))
@@ -572,7 +598,6 @@ if __name__=="__main__":
     os.makedirs(checkpoints_directory, exist_ok=True)
     MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model.h5')
 
-    
     m_a = {}
     seeds = random.sample(range(1, 200), 5)
     for s in seeds:
