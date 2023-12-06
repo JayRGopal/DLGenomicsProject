@@ -3,3 +3,4 @@
 ADNI/**
 ADNI_Label_Matching/**
 logs/**
+checkpoints/**

@@ -330,7 +330,6 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
 
         merged = concatenate([out_1, out_2, out_3])
 
-        pdb.set_trace()
 
 
         
@@ -452,9 +451,6 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
                         class_weight=d_class_weights,
                         validation_split=0.1,
                         verbose=1)
-                        
-                
-    pdb.set_trace()
 
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
     
@@ -468,7 +464,7 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     # Save model
     model.save_weights(save_path)
     
-
+    
     plt.clf()
     plt.plot(history.history['sparse_categorical_accuracy'])
     plt.plot(history.history['val_sparse_categorical_accuracy'])
@@ -489,6 +485,7 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     plt.show()
     plt.savefig('../reports/loss_' + str(mode) + '_' + str(learning_rate) +'_' + str(batch_size)+'.png')
     plt.clf()
+
     
  
     
@@ -600,13 +597,13 @@ if __name__=="__main__":
     parent_directory = os.path.abspath(os.path.join(current_script_path, os.pardir))
     checkpoints_directory = os.path.join(parent_directory, 'checkpoints')
     os.makedirs(checkpoints_directory, exist_ok=True)
-    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model.h5')
+    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model_SA.h5')
 
     m_a = {}
     seeds = random.sample(range(1, 200), 5)
     for s in seeds:
-        acc, bs_, lr_, e_ , seed= train('MM_OVO', 32, 50, 0.001, s, MODEL_SAVE_PATH)
-        m_a[acc] = ('MM_OVO', acc, bs_, lr_, e_, seed)
+        acc, bs_, lr_, e_ , seed= train('MM_SA', 32, 50, 0.001, s, MODEL_SAVE_PATH)
+        m_a[acc] = ('MM_SA', acc, bs_, lr_, e_, seed)
     print(m_a)
     print ('-'*55)
     max_acc = max(m_a, key=float)
