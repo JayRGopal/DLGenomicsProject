@@ -51,6 +51,7 @@ class OvOAttention(layers.Layer):
         context = tf.matmul(attn, tf.squeeze(main, 2))
         return context, attn
 
+
 class CustomMultiHeadAttention(layers.Layer):
     """
     TensorFlow layer that implements Multi-Head attention mechanism.
@@ -79,16 +80,11 @@ class CustomMultiHeadAttention(layers.Layer):
         Returns:
             A tensor of shape (batch_size, seq_len, embed_dim) representing the context vector.
         """
-        #pdb.set_trace()
-
-        batch_size = tf.shape(main)[0]
         main = tf.expand_dims(main, 1)
         sh = tf.shape(main)
         bsz = sh[0]
         tgt_len = sh[1]
         embed_dim = sh[2]
-        #bsz, tgt_len, embed_dim = tf.shape(main)
-        src_len = tf.shape(main)[0]
 
         main = tf.reshape(main, (tgt_len, bsz * self.num_heads, self.d_head))
         main = tf.transpose(main, perm=[1, 0, 2])
@@ -110,15 +106,17 @@ class CustomMultiHeadAttention(layers.Layer):
         processed_others.append(mod)
 
         #pdb.set_trace()
-
+        # print("BEFORE OVO")
+        # print(tf.shape(main))
         context, attn = self.ovo_attn(processed_others, main, self.W)
-        context = tf.reshape(context, (bsz * tgt_len, embed_dim))
-        context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
+        # print("AFTER OVO")
+        # print(tf.shape(context))
+        # context = tf.reshape(context, (bsz * tgt_len, embed_dim))
+        # context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
 
         if return_attention_weights:
             return context, attn
         return context
-
 
 
 
@@ -330,7 +328,6 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
 
         merged = concatenate([out_1, out_2, out_3])
 
-        pdb.set_trace()
 
 
         
@@ -452,12 +449,11 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
                         class_weight=d_class_weights,
                         validation_split=0.1,
                         verbose=1)
-                        
-                
-    pdb.set_trace()
 
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
     
+    #pdb.set_trace()
+
     acc = score[1] 
     test_predictions = model.predict([test_clinical, test_snp, test_img])
     cr, precision_d, recall_d, thres = calc_confusion_matrix(test_predictions, test_label, mode, learning_rate, batch_size, epochs)
@@ -600,7 +596,7 @@ if __name__=="__main__":
     parent_directory = os.path.abspath(os.path.join(current_script_path, os.pardir))
     checkpoints_directory = os.path.join(parent_directory, 'checkpoints')
     os.makedirs(checkpoints_directory, exist_ok=True)
-    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model.h5')
+    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model_OVO.h5')
 
     m_a = {}
     seeds = random.sample(range(1, 200), 5)

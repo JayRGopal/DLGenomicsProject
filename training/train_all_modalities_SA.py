@@ -18,6 +18,7 @@ from sklearn.metrics import precision_recall_curve
 from tensorflow.keras import layers
 import pickle
 import pdb
+import re
 
 
 
@@ -386,10 +387,17 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
     output = Dense(3, activation='softmax')(merged)
     model = Model([in_clinical, in_snp, in_img], output)        
 
-    # Only for OVO Attention
     if return_attention_weights:
-        return model, [attn_weights_1, attn_weights_2, attn_weights_3]
-        
+        if mode == 'MM_OVO':
+            return model, [attn_weights_1, attn_weights_2, attn_weights_3]
+        elif mode == 'MM_BA':
+            return model, [vt_att, av_att, ta_att]
+        elif mode == 'MM_SA':
+            return model, [vv_att, tt_att, aa_att]
+        elif mode == 'MM_SA_BA':
+            return model, [vt_att, av_att, ta_att]
+
+
     return model
 
 
@@ -442,18 +450,25 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     #visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
 
     # summarize results
-    history = model.fit([train_clinical,
-                         train_snp,
-                         train_img],
-                        train_label,
-                        epochs=epochs,
-                        batch_size=batch_size,
-                        class_weight=d_class_weights,
-                        validation_split=0.1,
-                        verbose=1)
+    # history = model.fit([train_clinical,
+    #                      train_snp,
+    #                      train_img],
+    #                     train_label,
+    #                     epochs=epochs,
+    #                     batch_size=batch_size,
+    #                     class_weight=d_class_weights,
+    #                     validation_split=0.1,
+    #                     verbose=1)
+    model.load_weights(save_path)
 
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
     
+    # SALIENCY MAPS
+    saliency_maps = compute_multi_modal_saliency_maps(model, [test_clinical, test_snp, test_img])
+    visualize_some_saliency(test_img, saliency_maps, save_path)
+    
+    pdb.set_trace()
+
     acc = score[1] 
     test_predictions = model.predict([test_clinical, test_snp, test_img])
     cr, precision_d, recall_d, thres = calc_confusion_matrix(test_predictions, test_label, mode, learning_rate, batch_size, epochs)
@@ -525,25 +540,90 @@ def visualize_attention_weights(attention_weights, title):
         plt.ylabel('Heads')
         plt.show()
 
+def visualize_some_saliency(test_img, saliency_maps, save_path):
+    for mri_index_now in range(5):
+        extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
+        MODE = extract_mode(save_path)
+        mri_path = f'../reports/saliency_mri_{MODE}_{mri_index_now}.png'
+        plot_mri_with_heatmaps(test_img[mri_index_now], saliency_maps[2][mri_index_now], mri_path)
+    
 
-def compute_multi_modal_saliency_maps(model, inputs, class_idx):
+def plot_mri_with_heatmaps(mri_images, heatmaps, save_path):
     """
-    Compute saliency maps for all inputs in a multi-modal model.
+    Plots MRI images and the same images with normalized heatmaps overlay.
+
+    Args:
+    mri_images: (72, 72, 3) numpy array representing the MRI images (3 slices).
+    heatmaps: (72, 72, 3) numpy array representing the importance scores (3 heatmaps).
+    save_path: Path where the combined figure will be saved.
+    """
+    if mri_images.shape != (72, 72, 3) or heatmaps.shape != (72, 72, 3):
+        raise ValueError("Both mri_images and heatmaps must be of shape (72, 72, 3)")
+
+    plt.figure(figsize=(12, 18))
+    slice_names = ["Sagittal", "Axial", "Coronal"]
+
+    for i in range(3):
+        # Normalize the heatmap for slice i
+        mean = np.mean(heatmaps[:, :, i])
+        std = np.std(heatmaps[:, :, i])
+        heatmap_normalized = (heatmaps[:, :, i] - mean) / std
+        heatmap_normalized = (heatmap_normalized - np.min(heatmap_normalized)) / (np.max(heatmap_normalized) - np.min(heatmap_normalized))
+
+        # Flip Sagittal and Coronal slices and their heatmaps
+        if slice_names[i] in ["Sagittal", "Coronal"]:
+            mri_slice = np.flipud(mri_images[:, :, i])
+            heatmap_slice = np.flipud(heatmap_normalized)
+        else:
+            mri_slice = mri_images[:, :, i]
+            heatmap_slice = heatmap_normalized
+
+        # Plot the original MRI image
+        plt.subplot(3, 2, 2*i + 1)
+        plt.imshow(mri_slice, cmap='gray')
+        plt.title(f"Original {slice_names[i]} Image")
+        plt.axis('off')
+
+        # Plot MRI with normalized heatmap overlay
+        plt.subplot(3, 2, 2*i + 2)
+        plt.imshow(mri_slice, cmap='gray')
+        plt.imshow(heatmap_slice, cmap='viridis', alpha=0.5)  # Overlay the normalized heatmap
+        plt.title(f"{slice_names[i]} with Heatmap Overlay")
+        plt.axis('off')
+
+    # Save the figure
+    plt.savefig(save_path, bbox_inches='tight')
+    plt.close()
+
+
+def compute_multi_modal_saliency_maps(model, inputs):
+    """
+    Compute saliency maps for all inputs in a multi-modal model without specifying a class index.
 
     Args:
     model: The trained multi-modal model.
     inputs: List of inputs corresponding to each modality (clinical, snp, mri).
-    class_idx: The class index for which the saliency maps are computed.
+            These can be numpy arrays or tf.Tensors.
 
     Returns:
     List of numpy arrays: The computed saliency maps for each modality.
     """
-    with tf.GradientTape() as tape:
-        tape.watch(inputs)
-        predictions = model(inputs)
-        loss = predictions[:, class_idx]
+    # Convert inputs to tf.float32 tensors if they are not already
+    tensor_inputs = [tf.cast(tf.convert_to_tensor(input_data), tf.float32) for input_data in inputs]
 
-    gradients = tape.gradient(loss, inputs)
+    with tf.GradientTape() as tape:
+        # Watch the tensor inputs
+        tape.watch(tensor_inputs)
+        predictions = model(tensor_inputs)
+        # Use the model's output (e.g., the logits or probabilities) for gradient computation
+        loss = tf.reduce_sum(predictions)  # Sums up the outputs for gradient calculation
+
+    gradients = tape.gradient(loss, tensor_inputs)
+
+    # Check if gradients are computed successfully
+    if any(grad is None for grad in gradients):
+        raise ValueError("Gradient computation failed. Check if the model and inputs are compatible.")
+
     saliency_maps = [tf.abs(grad).numpy() for grad in gradients]
     return saliency_maps
 
