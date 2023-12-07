@@ -398,10 +398,13 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
     train_clinical = pickle.load(open("../ADNI/X_train_clinical.pkl", 'rb')).values
     test_clinical= pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb')).values
-    import pdb; pdb.set_trace()
+    
+    clinical_column_names = pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb')).columns
     
     train_snp = pickle.load(open("../ADNI/X_train_snp.pkl", 'rb')).values
     test_snp = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).values
+
+    snp_column_names = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).columns
 
     train_img= make_img("../ADNI/X_train_img.pkl")
     test_img= make_img("../ADNI/X_test_img.pkl")
@@ -452,12 +455,16 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
                         verbose=1)
 
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
+    #model.load_weights(save_path)
     
     # SALIENCY MAPS
-    saliency_maps = compute_multi_modal_saliency_maps(model, [test_clinical, test_snp, test_img])
-    visualize_some_saliency(test_img, saliency_maps, save_path)
+    # saliency_maps = compute_multi_modal_saliency_maps(model, [test_clinical, test_snp, test_img], test_label)
+    # ####visualize_some_saliency(test_img, saliency_maps, save_path)
+
+    # ranking_snps = rank_snps_by_importance(saliency_maps[1])
+    # save_top_snps(ranking_snps, snp_column_names, save_path)
     
-    pdb.set_trace()
+    # pdb.set_trace()
 
     acc = score[1] 
     test_predictions = model.predict([test_clinical, test_snp, test_img])
@@ -512,6 +519,17 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
 ########### CSCI 2952G: Explainability Core ############    
 
 
+def save_top_snps(snp_ranking, snp_col_names, model_save_path):
+    extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
+    MODE = extract_mode(model_save_path)
+    snp_path = f'../reports/saliency_snp_{MODE}.json'
+    top10_snps = snp_ranking[:10]
+    top10_snps = [snp_col_names[i] for i in top10_snps]
+    with open(snp_path, 'w') as file: json.dump(top10_snps, file)
+    print(f'Saved Top SNPs to {snp_path}')
+    return
+
+
 def visualize_attention_weights(attention_weights, title):
     """
     Assumes attention_weights is a list of numpy arrays
@@ -530,7 +548,7 @@ def visualize_attention_weights(attention_weights, title):
         plt.show()
 
 def visualize_some_saliency(test_img, saliency_maps, save_path):
-    for mri_index_now in range(5):
+    for mri_index_now in range(24):
         extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
         MODE = extract_mode(save_path)
         mri_path = f'../reports/saliency_mri_{MODE}_{mri_index_now}.png'
@@ -586,37 +604,98 @@ def plot_mri_with_heatmaps(mri_images, heatmaps, save_path):
 
 
 
-def compute_multi_modal_saliency_maps(model, inputs):
+# def compute_multi_modal_saliency_maps(model, inputs):
+#     """
+#     Compute saliency maps for all inputs in a multi-modal model without specifying a class index.
+
+#     Args:
+#     model: The trained multi-modal model.
+#     inputs: List of inputs corresponding to each modality (clinical, snp, mri).
+#             These can be numpy arrays or tf.Tensors.
+
+#     Returns:
+#     List of numpy arrays: The computed saliency maps for each modality.
+#     """
+#     # Convert inputs to tf.float32 tensors if they are not already
+#     tensor_inputs = [tf.cast(tf.convert_to_tensor(input_data), tf.float32) for input_data in inputs]
+
+#     with tf.GradientTape() as tape:
+#         # Watch the tensor inputs
+#         tape.watch(tensor_inputs)
+#         predictions = model(tensor_inputs)
+#         # Use the model's output (e.g., the logits or probabilities) for gradient computation
+#         loss = tf.reduce_sum(predictions)  # Sums up the outputs for gradient calculation
+
+#     gradients = tape.gradient(loss, tensor_inputs)
+
+#     # Check if gradients are computed successfully
+#     if any(grad is None for grad in gradients):
+#         raise ValueError("Gradient computation failed. Check if the model and inputs are compatible.")
+
+#     saliency_maps = [tf.abs(grad).numpy() for grad in gradients]
+#     return saliency_maps
+
+
+def compute_multi_modal_saliency_maps(model, inputs, target):
     """
-    Compute saliency maps for all inputs in a multi-modal model without specifying a class index.
+    Compute saliency maps for all inputs in a multi-modal model with a specified target.
 
     Args:
     model: The trained multi-modal model.
     inputs: List of inputs corresponding to each modality (clinical, snp, mri).
             These can be numpy arrays or tf.Tensors.
+    target: The target tensor for computing loss (class labels).
 
     Returns:
     List of numpy arrays: The computed saliency maps for each modality.
     """
-    # Convert inputs to tf.float32 tensors if they are not already
     tensor_inputs = [tf.cast(tf.convert_to_tensor(input_data), tf.float32) for input_data in inputs]
+    tensor_target = tf.cast(tf.convert_to_tensor(target), tf.float32)
 
     with tf.GradientTape() as tape:
-        # Watch the tensor inputs
         tape.watch(tensor_inputs)
         predictions = model(tensor_inputs)
-        # Use the model's output (e.g., the logits or probabilities) for gradient computation
-        loss = tf.reduce_sum(predictions)  # Sums up the outputs for gradient calculation
+
+        # Reshape target to match predictions if necessary
+        if len(tensor_target.shape) == 1 and len(predictions.shape) == 2:
+            tensor_target = tf.one_hot(tf.cast(tensor_target, tf.int32), depth=predictions.shape[-1])
+
+        loss = tf.keras.losses.MSE(tensor_target, predictions)
+        #loss = tf.keras.losses.categorical_crossentropy(tensor_target, predictions, from_logits=True)
 
     gradients = tape.gradient(loss, tensor_inputs)
-
-    # Check if gradients are computed successfully
-    if any(grad is None for grad in gradients):
-        raise ValueError("Gradient computation failed. Check if the model and inputs are compatible.")
+    gradients = [tf.clip_by_value(grad, -1, 1) for grad in gradients]
 
     saliency_maps = [tf.abs(grad).numpy() for grad in gradients]
     return saliency_maps
 
+def rank_snps_by_importance(saliency_scores):
+    """
+    Rank SNPs based on their importance using mean reciprocal rank.
+
+    Args:
+    saliency_scores (numpy.ndarray): A 2D array of shape (num_inputs, num_snps) containing saliency scores.
+
+    Returns:
+    numpy.ndarray: A 1D array of SNP indices ranked by their importance.
+    """
+    num_inputs, num_snps = saliency_scores.shape
+
+    # Initialize a matrix to hold ranks for each input
+    ranks = np.zeros_like(saliency_scores, dtype=float)
+
+    # Loop through each input and rank the SNPs
+    for i in range(num_inputs):
+        # argsort twice to get rank positions; smaller rank means more important
+        ranks[i, :] = np.argsort(np.argsort(-saliency_scores[i, :]))
+
+    # Compute mean reciprocal rank for each SNP
+    mrr = np.mean(1.0 / (ranks + 1), axis=0)
+
+    # Get indices of SNPs sorted by their MRR (descending order of importance)
+    ranked_snps = np.argsort(-mrr)
+
+    return ranked_snps
 
 
 def maximize_multi_modal_activation(model, target_layer, input_shapes, iterations=30, step=1.0):
@@ -668,13 +747,14 @@ if __name__=="__main__":
     parent_directory = os.path.abspath(os.path.join(current_script_path, os.pardir))
     checkpoints_directory = os.path.join(parent_directory, 'checkpoints')
     os.makedirs(checkpoints_directory, exist_ok=True)
-    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model_OVO.h5')
+
+    EPOCHS_NOW = 50
 
     m_a = {}
-    seeds = random.sample(range(1, 200), 5)
-    for s in seeds:
-        acc, bs_, lr_, e_ , seed= train('MM_OVO', 32, 50, 0.001, s, MODEL_SAVE_PATH)
-        m_a[acc] = ('MM_OVO', acc, bs_, lr_, e_, seed)
+    s = 191
+    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, f'model_OVO_{s}.h5')
+    acc, bs_, lr_, e_ , seed= train('MM_OVO', 32, EPOCHS_NOW, 0.001, s, MODEL_SAVE_PATH)
+    m_a[acc] = ('MM_OVO', acc, bs_, lr_, e_, seed)
     print(m_a)
     print ('-'*55)
     max_acc = max(m_a, key=float)

@@ -79,16 +79,11 @@ class CustomMultiHeadAttention(layers.Layer):
         Returns:
             A tensor of shape (batch_size, seq_len, embed_dim) representing the context vector.
         """
-        #pdb.set_trace()
-
-        batch_size = tf.shape(main)[0]
         main = tf.expand_dims(main, 1)
         sh = tf.shape(main)
         bsz = sh[0]
         tgt_len = sh[1]
         embed_dim = sh[2]
-        #bsz, tgt_len, embed_dim = tf.shape(main)
-        src_len = tf.shape(main)[0]
 
         main = tf.reshape(main, (tgt_len, bsz * self.num_heads, self.d_head))
         main = tf.transpose(main, perm=[1, 0, 2])
@@ -110,10 +105,13 @@ class CustomMultiHeadAttention(layers.Layer):
         processed_others.append(mod)
 
         #pdb.set_trace()
-
+        # print("BEFORE OVO")
+        # print(tf.shape(main))
         context, attn = self.ovo_attn(processed_others, main, self.W)
-        context = tf.reshape(context, (bsz * tgt_len, embed_dim))
-        context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
+        # print("AFTER OVO")
+        # print(tf.shape(context))
+        # context = tf.reshape(context, (bsz * tgt_len, embed_dim))
+        # context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
 
         if return_attention_weights:
             return context, attn
@@ -531,7 +529,7 @@ def visualize_attention_weights(attention_weights, title):
         plt.show()
 
 def visualize_some_saliency(test_img, saliency_maps, save_path):
-    for mri_index_now in range(5):
+    for mri_index_now in range(24):
         extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
         MODE = extract_mode(save_path)
         mri_path = f'../reports/saliency_mri_{MODE}_{mri_index_now}.png'
@@ -668,11 +666,11 @@ if __name__=="__main__":
     parent_directory = os.path.abspath(os.path.join(current_script_path, os.pardir))
     checkpoints_directory = os.path.join(parent_directory, 'checkpoints')
     os.makedirs(checkpoints_directory, exist_ok=True)
-    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, 'model_SA_BA.h5')
-
+    
     m_a = {}
     seeds = random.sample(range(1, 200), 5)
     for s in seeds:
+        MODEL_SAVE_PATH = os.path.join(checkpoints_directory, f'model_SA_BA_{s}.h5')
         acc, bs_, lr_, e_ , seed= train('MM_SA_BA', 32, 50, 0.001, s, MODEL_SAVE_PATH)
         m_a[acc] = ('MM_SA_BA', acc, bs_, lr_, e_, seed)
     print(m_a)
