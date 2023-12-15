@@ -558,19 +558,17 @@ def visualize_attention_weights(attention_weights, title):
     Visualizes the given attention weights.
     NOTE: Assumes attention_weights is a list of numpy arrays
     """
-
     # Loop through modalities
-    print(type(attention_weights))
     for i, attn in enumerate(attention_weights):
-        print(attn)
         plt.figure(figsize=(10, 4))
         # Make heatmap of attention weights
-        sns.heatmap(attn.numpy(), cmap='viridis')
+        sns.heatmap(np.mean(np.transpose(attn[0], [1, 0, 2]), axis = 0), cmap='viridis')
+        #sns.heatmap(attn[1], cmap='viridis')
+
         plt.title(f'{title} - Modality {i+1}')
         plt.xlabel('Sequence Length')
         plt.ylabel('Heads')
         plt.show()
-
 
 def visualize_some_saliency(test_img, saliency_maps, save_path):
     for mri_index_now in range(24):
@@ -587,7 +585,7 @@ def plot_mri_with_heatmaps(mri_images, heatmaps, save_path):
 
     if mri_images.shape != (72, 72, 3) or heatmaps.shape != (72, 72, 3):
         raise ValueError("Both mri_images and heatmaps must be of shape (72, 72, 3)")
-    
+
     plt.figure(figsize=(12, 18))
     slice_names = ["Sagittal", "Axial", "Coronal"]
 
