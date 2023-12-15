@@ -19,104 +19,9 @@ from tensorflow.keras import layers
 import pickle
 import pdb
 import re
+import json
+import time
 
-
-
-########### CSCI 2952G: Added OVO Attention ############    
-
-class OvOAttention(layers.Layer):
-    """
-    TensorFlow layer that implements One-vs-Others attention mechanism.
-    """
-
-    def __init__(self):
-        super(OvOAttention, self).__init__()
-
-    def call(self, others, main, W):
-        """
-        Compute context vector and attention weights using One-vs-Others attention.
-
-        Args:
-            others: List of tensors of shape (batch_size, num_heads, seq_len, embed_dim) representing
-                    the other modality inputs.
-            main: A tensor of shape (batch_size, num_heads, seq_len, embed_dim) representing the main modality input.
-            W: A learnable parameter tensor of shape (d_head, d_head) representing the weight matrix.
-
-        Returns:
-            A tensor of shape (batch_size, embed_dim) representing the context vector.
-            A tensor of shape (batch_size, num_heads, seq_len) representing the attention weights.
-        """
-        mean = tf.reduce_mean(tf.stack(others, axis=0), axis=0)
-        score = tf.matmul(tf.squeeze(mean, 2), W) @ tf.transpose(tf.squeeze(main, 2), perm=[0, 2, 1])
-        attn = tf.nn.softmax(score, axis=-1)
-        context = tf.matmul(attn, tf.squeeze(main, 2))
-        return context, attn
-
-class CustomMultiHeadAttention(layers.Layer):
-    """
-    TensorFlow layer that implements Multi-Head attention mechanism.
-    """
-
-    def __init__(self, d_model=50, num_heads=5):
-        super(CustomMultiHeadAttention, self).__init__()
-        self.d_head = d_model // num_heads
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.ovo_attn = OvOAttention()
-        self.query_proj = layers.Dense(self.d_head * num_heads)
-        self.key_proj = layers.Dense(self.d_head * num_heads)
-        self.value_proj = layers.Dense(self.d_head * num_heads)
-        self.W = self.add_weight(shape=(self.d_head, self.d_head), initializer="random_normal")
-
-    def call(self, others, main, return_attention_weights=False):
-        """
-        Compute context vector using Multi-Head attention.
-
-        Args:
-            others: List of tensors of shape (batch_size, num_heads, seq_len, embed_dim) representing
-                    the other modality inputs.
-            main: A tensor of shape (batch_size, num_heads, seq_len, embed_dim) representing the main modality input.
-
-        Returns:
-            A tensor of shape (batch_size, seq_len, embed_dim) representing the context vector.
-        """
-        main = tf.expand_dims(main, 1)
-        sh = tf.shape(main)
-        bsz = sh[0]
-        tgt_len = sh[1]
-        embed_dim = sh[2]
-
-        main = tf.reshape(main, (tgt_len, bsz * self.num_heads, self.d_head))
-        main = tf.transpose(main, perm=[1, 0, 2])
-        main = tf.reshape(main, (bsz, self.num_heads, tgt_len, self.d_head))
-
-        processed_others = []
-        mod = others[0]
-        mod = tf.expand_dims(mod, 1)
-        mod = tf.reshape(mod, (tgt_len, bsz * self.num_heads, self.d_head))
-        mod = tf.transpose(mod, perm=[1, 0, 2])
-        mod = tf.reshape(mod, (bsz, self.num_heads, tgt_len, self.d_head))
-        processed_others.append(mod)
-
-        mod = others[1]
-        mod = tf.expand_dims(mod, 1)
-        mod = tf.reshape(mod, (tgt_len, bsz * self.num_heads, self.d_head))
-        mod = tf.transpose(mod, perm=[1, 0, 2])
-        mod = tf.reshape(mod, (bsz, self.num_heads, tgt_len, self.d_head))
-        processed_others.append(mod)
-
-        #pdb.set_trace()
-        # print("BEFORE OVO")
-        # print(tf.shape(main))
-        context, attn = self.ovo_attn(processed_others, main, self.W)
-        # print("AFTER OVO")
-        # print(tf.shape(context))
-        # context = tf.reshape(context, (bsz * tgt_len, embed_dim))
-        # context = tf.reshape(context, (bsz, tgt_len, tf.shape(context)[1]))
-
-        if return_attention_weights:
-            return context, attn
-        return context
 
 
 
@@ -243,45 +148,6 @@ def cross_modal_attention(x, y):
     return concatenate([a1, a2])
 
 
-########### CSCI 2952G: Utilize OVO Attention Class ############    
-def ovo_modal_attention(x, other_modalities, return_attention_weights=False):
-    """
-    Function to compute attention using One-vs-Others attention mechanism.
-
-    Args:
-        x: A tensor representing the main modality input.
-        other_modalities: A list of tensors representing other modality inputs.
-        return_attention_weights (bool): If True, returns attention weights along with the outputs.
-
-    Returns:
-        Tensor: The result of applying One-vs-Others attention mechanism.
-        Tensor (optional): The attention weights if return_attention_weights is True.
-    """
-    # Expand the dimensions of the main modality input
-    x = tf.expand_dims(x, axis=1)
-
-    # Prepare other modalities
-    processed_others = [tf.expand_dims(modality, axis=1) for modality in other_modalities]
-
-    # Initialize the CustomMultiHeadAttention layer
-    mha = CustomMultiHeadAttention(num_heads=5)
-
-    # Apply CustomMultiHeadAttention using OvOAttention
-    a1, weights1 = mha(processed_others, x, return_attention_weights=True)
-    a1 = a1[:, 0, :]
-
-    # For symmetry, compute the attention with x being treated as the other modality
-    a2, weights2 = mha([x] * len(other_modalities), other_modalities[0], return_attention_weights=True)
-    a2 = a2[:, 0, :]
-
-    # Concatenate the results
-    output = tf.concat([a1, a2], axis=1)
-
-    if return_attention_weights:
-        return output, (weights1, weights2)
-    else:
-        return output
-
 
 def self_attention(x):
     x = tf.expand_dims(x, axis=1)
@@ -306,30 +172,6 @@ def multi_modal_model(mode, train_clinical, train_snp, train_img, return_attenti
         
     ########### Attention Layer ############
     
-    ########### CSCI 2952G: Add OVO Attention Mode ############    
-    ## One-Versus-Others Attention ##
-
-    if mode == 'MM_OVO':
-        main_1 = dense_img
-        other_modalities_1 = [dense_clinical, dense_snp]
-        main_2 = dense_clinical
-        other_modalities_2 = [dense_img, dense_snp]
-        main_3 = dense_snp
-        other_modalities_3 = [dense_img, dense_clinical]
-        
-        ########### CSCI 2952G: Add Attention Weight Extraction ############
-        if return_attention_weights:
-            out_1, attn_weights_1 = ovo_modal_attention(main_1, other_modalities_1, return_attention_weights=True)
-            out_2, attn_weights_2 = ovo_modal_attention(main_2, other_modalities_2, return_attention_weights=True)
-            out_3, attn_weights_3 = ovo_modal_attention(main_3, other_modalities_3, return_attention_weights=True)
-        else:
-            out_1 = ovo_modal_attention(main_1, other_modalities_1)
-            out_2 = ovo_modal_attention(main_2, other_modalities_2)
-            out_3 = ovo_modal_attention(main_3, other_modalities_3)
-
-        merged = concatenate([out_1, out_2, out_3])
-
-
 
         
     
@@ -399,9 +241,12 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     train_clinical = pickle.load(open("../ADNI/X_train_clinical.pkl", 'rb')).values
     test_clinical= pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb')).values
 
+    clinical_column_names = pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb')).columns
     
     train_snp = pickle.load(open("../ADNI/X_train_snp.pkl", 'rb')).values
     test_snp = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).values
+
+    snp_column_names = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).columns
 
     train_img= make_img("../ADNI/X_train_img.pkl")
     test_img= make_img("../ADNI/X_test_img.pkl")
@@ -440,6 +285,9 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     # Visualize attention weights
     #visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
 
+    # Record the start time
+    start_time = time.time()
+    
     # summarize results
     history = model.fit([train_clinical,
                          train_snp,
@@ -451,13 +299,25 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
                         validation_split=0.1,
                         verbose=1)
 
+    # Record the end time
+    end_time = time.time()
+
+    # Calculate the elapsed time in seconds
+    elapsed_time = end_time - start_time
+
+    print(f"Elapsed time: {elapsed_time} seconds")
+
+    #model.load_weights(save_path)
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
     
     # SALIENCY MAPS
     saliency_maps = compute_multi_modal_saliency_maps(model, [test_clinical, test_snp, test_img])
-    visualize_some_saliency(test_img, saliency_maps, save_path)
+    ####visualize_some_saliency(test_img, saliency_maps, save_path)
 
-    pdb.set_trace()
+    ranking_snps = rank_snps_by_importance(saliency_maps[1])
+    save_top_snps(ranking_snps, snp_column_names, save_path)
+
+    # pdb.set_trace()
     
     acc = score[1] 
     test_predictions = model.predict([test_clinical, test_snp, test_img])
@@ -510,6 +370,28 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
 
 ########### CSCI 2952G: Explainability Core ############    
+
+
+def save_top_snps(snp_ranking, snp_col_names, model_save_path):
+    extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
+    MODE = extract_mode(model_save_path)
+    snp_path = f'../reports/saliency_snp_{MODE}.json'
+    top10_snps = snp_ranking[:10]
+    top10_snps = [snp_col_names[i] for i in top10_snps]
+    with open(snp_path, 'w') as file: json.dump(top10_snps, file)
+    print(f'Saved Top SNPs to {snp_path}')
+    return
+
+def save_top_clinical(clinical_ranking, clinical_col_names, model_save_path):
+    extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
+    MODE = extract_mode(model_save_path)
+    clinical_path = f'../reports/saliency_clinical_{MODE}.json'
+    top10_clinical = clinical_ranking[:10]
+    top10_clinical = [clinical_col_names[i] for i in top10_clinical]
+    with open(clinical_path, 'w') as file: json.dump(top10_clinical, file)
+    print(f'Saved Top Clinical Features to {clinical_path}')
+    return
+
 
 
 def visualize_attention_weights(attention_weights, title):
@@ -618,20 +500,41 @@ def compute_multi_modal_saliency_maps(model, inputs):
     return saliency_maps
 
 
+def rank_snps_by_importance(saliency_scores):
+    """
+    Rank SNPs based on their importance using mean reciprocal rank.
+
+    NOTE: we can use this same function for the clinical data, too!
+
+    Args:
+    saliency_scores (numpy.ndarray): A 2D array of shape (num_inputs, num_snps) containing saliency scores.
+
+    Returns:
+    numpy.ndarray: A 1D array of SNP indices ranked by their importance.
+    """
+    num_inputs, num_snps = saliency_scores.shape
+
+    # Initialize a matrix to hold ranks for each input
+    ranks = np.zeros_like(saliency_scores, dtype=float)
+
+    # Loop through each input and rank the SNPs
+    for i in range(num_inputs):
+        # argsort twice to get rank positions; smaller rank means more important
+        ranks[i, :] = np.argsort(np.argsort(-saliency_scores[i, :]))
+
+    # Compute mean reciprocal rank for each SNP
+    mrr = np.mean(1.0 / (ranks + 1), axis=0)
+
+    # Get indices of SNPs sorted by their MRR (descending order of importance)
+    ranked_snps = np.argsort(-mrr)
+
+    return ranked_snps
+
+
 
 def maximize_multi_modal_activation(model, target_layer, input_shapes, iterations=30, step=1.0):
     """
-    Generate inputs for each modality that maximize the activation of a specified layer in a multi-modal model.
-
-    Args:
-    model: The trained multi-modal model.
-    target_layer: The name of the layer to be maximized.
-    input_shapes: List of shapes for each modality input.
-    iterations: Number of gradient ascent steps.
-    step: Step size for gradient ascent.
-
-    Returns:
-    List of numpy arrays: The generated inputs for each modality.
+    Generate inputs for each modality that maximize the activation of a specified layer
     """
     # Initialize random inputs for each modality
     input_data = [tf.random.uniform((1, *shape), 0, 1) for shape in input_shapes]

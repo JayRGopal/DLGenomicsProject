@@ -19,6 +19,8 @@ from tensorflow.keras import layers
 import pickle
 import pdb
 import re
+import json
+import time
 
 
 ########### CSCI 2952G: Added OVO Attention ############    
@@ -398,9 +400,12 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     train_clinical = pickle.load(open("../ADNI/X_train_clinical.pkl", 'rb')).values
     test_clinical= pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb')).values
 
+    clinical_column_names = pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb')).columns
     
     train_snp = pickle.load(open("../ADNI/X_train_snp.pkl", 'rb')).values
     test_snp = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).values
+
+    snp_column_names = pickle.load(open("../ADNI/X_test_snp.pkl", 'rb')).columns
 
     train_img= make_img("../ADNI/X_train_img.pkl")
     test_img= make_img("../ADNI/X_test_img.pkl")
@@ -439,6 +444,10 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     # Visualize attention weights
     #visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
 
+    # Record the start time
+    start_time = time.time()
+
+
     # summarize results
     history = model.fit([train_clinical,
                          train_snp,
@@ -450,13 +459,29 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
                         validation_split=0.1,
                         verbose=1)
 
+    # Record the end time
+    end_time = time.time()
+
+    # Calculate the elapsed time in seconds
+    elapsed_time = end_time - start_time
+
+    print(f"Elapsed time: {elapsed_time} seconds")
+    
+    model.load_weights(save_path)
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
     
     # SALIENCY MAPS
     saliency_maps = compute_multi_modal_saliency_maps(model, [test_clinical, test_snp, test_img])
-    visualize_some_saliency(test_img, saliency_maps, save_path)
+    ####visualize_some_saliency(test_img, saliency_maps, save_path)
 
-    pdb.set_trace()
+    ranking_snps = rank_snps_by_importance(saliency_maps[1])
+    save_top_snps(ranking_snps, snp_column_names, save_path)
+
+    ranking_clinical = rank_snps_by_importance(saliency_maps[0]) # We can reuse the SNP function!
+    save_top_clinical(ranking_clinical, clinical_column_names, save_path)
+    
+
+    # pdb.set_trace()
     
     acc = score[1] 
     test_predictions = model.predict([test_clinical, test_snp, test_img])
@@ -509,6 +534,28 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     
 
 ########### CSCI 2952G: Explainability Core ############    
+
+
+def save_top_snps(snp_ranking, snp_col_names, model_save_path):
+    extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
+    MODE = extract_mode(model_save_path)
+    snp_path = f'../reports/saliency_snp_{MODE}.json'
+    top_snps = snp_ranking
+    top_snps = [snp_col_names[i] for i in top_snps]
+    with open(snp_path, 'w') as file: json.dump(top_snps, file)
+    print(f'Saved Top SNPs to {snp_path}')
+    return
+
+def save_top_clinical(clinical_ranking, clinical_col_names, model_save_path):
+    extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
+    MODE = extract_mode(model_save_path)
+    clinical_path = f'../reports/saliency_clinical_{MODE}.json'
+    top_clinical = clinical_ranking
+    top_clinical = [clinical_col_names[i] for i in top_clinical]
+    with open(clinical_path, 'w') as file: json.dump(top_clinical, file)
+    print(f'Saved Top Clinical Features to {clinical_path}')
+    return
+
 
 
 def visualize_attention_weights(attention_weights, title):
@@ -617,6 +664,37 @@ def compute_multi_modal_saliency_maps(model, inputs):
     return saliency_maps
 
 
+def rank_snps_by_importance(saliency_scores):
+    """
+    Rank SNPs based on their importance using mean reciprocal rank.
+
+    NOTE: we can use this same function for the clinical data, too!
+
+    Args:
+    saliency_scores (numpy.ndarray): A 2D array of shape (num_inputs, num_snps) containing saliency scores.
+
+    Returns:
+    numpy.ndarray: A 1D array of SNP indices ranked by their importance.
+    """
+    num_inputs, num_snps = saliency_scores.shape
+
+    # Initialize a matrix to hold ranks for each input
+    ranks = np.zeros_like(saliency_scores, dtype=float)
+
+    # Loop through each input and rank the SNPs
+    for i in range(num_inputs):
+        # argsort twice to get rank positions; smaller rank means more important
+        ranks[i, :] = np.argsort(np.argsort(-saliency_scores[i, :]))
+
+    # Compute mean reciprocal rank for each SNP
+    mrr = np.mean(1.0 / (ranks + 1), axis=0)
+
+    # Get indices of SNPs sorted by their MRR (descending order of importance)
+    ranked_snps = np.argsort(-mrr)
+
+    return ranked_snps
+
+
 def maximize_multi_modal_activation(model, target_layer, input_shapes, iterations=30, step=1.0):
     """
     Generate inputs for each modality that maximize the activation of a specified layer in a multi-modal model.
@@ -668,11 +746,10 @@ if __name__=="__main__":
     os.makedirs(checkpoints_directory, exist_ok=True)
     
     m_a = {}
-    seeds = random.sample(range(1, 200), 5)
-    for s in seeds:
-        MODEL_SAVE_PATH = os.path.join(checkpoints_directory, f'model_SA_BA_{s}.h5')
-        acc, bs_, lr_, e_ , seed= train('MM_SA_BA', 32, 50, 0.001, s, MODEL_SAVE_PATH)
-        m_a[acc] = ('MM_SA_BA', acc, bs_, lr_, e_, seed)
+    s = 153
+    MODEL_SAVE_PATH = os.path.join(checkpoints_directory, f'model_SA_BA_{s}.h5')
+    acc, bs_, lr_, e_ , seed= train('MM_SA_BA', 32, 50, 0.001, s, MODEL_SAVE_PATH)
+    m_a[acc] = ('MM_SA_BA', acc, bs_, lr_, e_, seed)
     print(m_a)
     print ('-'*55)
     max_acc = max(m_a, key=float)

@@ -19,6 +19,8 @@ from tensorflow.keras import layers
 import pickle
 import pdb
 import re
+import json
+import time
 
 
 
@@ -34,17 +36,7 @@ class OvOAttention(layers.Layer):
 
     def call(self, others, main, W):
         """
-        Compute context vector and attention weights using One-vs-Others attention.
-
-        Args:
-            others: List of tensors of shape (batch_size, num_heads, seq_len, embed_dim) representing
-                    the other modality inputs.
-            main: A tensor of shape (batch_size, num_heads, seq_len, embed_dim) representing the main modality input.
-            W: A learnable parameter tensor of shape (d_head, d_head) representing the weight matrix.
-
-        Returns:
-            A tensor of shape (batch_size, embed_dim) representing the context vector.
-            A tensor of shape (batch_size, num_heads, seq_len) representing the attention weights.
+        Compute context vector and attention weights via One-vs-Others attention.
         """
         mean = tf.reduce_mean(tf.stack(others, axis=0), axis=0)
         score = tf.matmul(tf.squeeze(mean, 2), W) @ tf.transpose(tf.squeeze(main, 2), perm=[0, 2, 1])
@@ -72,14 +64,6 @@ class CustomMultiHeadAttention(layers.Layer):
     def call(self, others, main, return_attention_weights=False):
         """
         Compute context vector using Multi-Head attention.
-
-        Args:
-            others: List of tensors of shape (batch_size, num_heads, seq_len, embed_dim) representing
-                    the other modality inputs.
-            main: A tensor of shape (batch_size, num_heads, seq_len, embed_dim) representing the main modality input.
-
-        Returns:
-            A tensor of shape (batch_size, seq_len, embed_dim) representing the context vector.
         """
         main = tf.expand_dims(main, 1)
         sh = tf.shape(main)
@@ -246,16 +230,8 @@ def cross_modal_attention(x, y):
 ########### CSCI 2952G: Utilize OVO Attention Class ############    
 def ovo_modal_attention(x, other_modalities, return_attention_weights=False):
     """
-    Function to compute attention using One-vs-Others attention mechanism.
+    Function to compute attention using the One-vs-Others mechanism.
 
-    Args:
-        x: A tensor representing the main modality input.
-        other_modalities: A list of tensors representing other modality inputs.
-        return_attention_weights (bool): If True, returns attention weights along with the outputs.
-
-    Returns:
-        Tensor: The result of applying One-vs-Others attention mechanism.
-        Tensor (optional): The attention weights if return_attention_weights is True.
     """
     # Expand the dimensions of the main modality input
     x = tf.expand_dims(x, axis=1)
@@ -427,8 +403,6 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     print('Labels: ', test_label.shape)
     print()
 
-    # train_label = np.zeros(215)
-    # test_label = np.zeros(24)
 
     reset_random_seeds(seed)
     class_weights = compute_class_weight(class_weight = 'balanced',classes = np.unique(train_label),y = train_label)
@@ -443,6 +417,9 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
     # Visualize attention weights
     #visualize_attention_weights(attention_weights, 'Attention Weights Visualization')
 
+    # Record the start time
+    start_time = time.time()
+
     # summarize results
     history = model.fit([train_clinical,
                          train_snp,
@@ -454,22 +431,58 @@ def train(mode, batch_size, epochs, learning_rate, seed, save_path):
                         validation_split=0.1,
                         verbose=1)
 
+    # Record the end time
+    end_time = time.time()
+
+    # Calculate the elapsed time in seconds
+    elapsed_time = end_time - start_time
+
+    print(f"Elapsed time: {elapsed_time} seconds")
+    
+
+    model.load_weights(save_path)
     score = model.evaluate([test_clinical, test_snp, test_img], test_label)
-    #model.load_weights(save_path)
     
     # SALIENCY MAPS
-    # saliency_maps = compute_multi_modal_saliency_maps(model, [test_clinical, test_snp, test_img], test_label)
-    # ####visualize_some_saliency(test_img, saliency_maps, save_path)
+    saliency_maps = compute_multi_modal_saliency_maps(model, [test_clinical, test_snp, test_img], test_label)
+    visualize_some_saliency(test_img, saliency_maps, save_path)
 
-    # ranking_snps = rank_snps_by_importance(saliency_maps[1])
-    # save_top_snps(ranking_snps, snp_column_names, save_path)
+    ranking_snps = rank_snps_by_importance(saliency_maps[1])
+    save_top_snps(ranking_snps, snp_column_names, save_path)
+
+    ranking_clinical = rank_snps_by_importance(saliency_maps[0]) # We can reuse the SNP function!
+    save_top_clinical(ranking_clinical, clinical_column_names, save_path)
     
-    # pdb.set_trace()
 
     acc = score[1] 
     test_predictions = model.predict([test_clinical, test_snp, test_img])
     cr, precision_d, recall_d, thres = calc_confusion_matrix(test_predictions, test_label, mode, learning_rate, batch_size, epochs)
     
+
+    # CLASS-BASED OPTIMIZATION
+    clinical_columns = pickle.load(open("../ADNI/X_test_clinical.pkl", 'rb'))
+    clinical_columns = clinical_columns.iloc[0:0]
+
+    maximixed_inputs = maximize_class_activation(model, 0, [[106], [15965], [72, 72, 3]])
+
+    print("CLASS 1")
+    print(maximixed_inputs[0])
+    clinical_columns.loc[len(clinical_columns)] = maximixed_inputs[0]
+
+    print("CLASS 2")
+    maximixed_inputs = maximize_class_activation(model, 1, [[106], [15965], [72, 72, 3]])
+    print(maximixed_inputs[0])
+    clinical_columns.loc[len(clinical_columns)] = maximixed_inputs[0]
+
+    print("CLASS 3")
+    maximixed_inputs = maximize_class_activation(model, 2, [[106], [15965], [72, 72, 3]])
+    print(maximixed_inputs[0])
+    clinical_columns.loc[len(clinical_columns)] = maximixed_inputs[0]
+    clinical_columns.to_csv('./maximized_inputs_BA.csv', index=False)  # Set index=False to exclude the index column
+
+    print(clinical_columns)
+
+
     # Classification report
     #plot_classification_report(test_label, test_predictions, mode, learning_rate, batch_size, epochs)
 
@@ -523,16 +536,27 @@ def save_top_snps(snp_ranking, snp_col_names, model_save_path):
     extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
     MODE = extract_mode(model_save_path)
     snp_path = f'../reports/saliency_snp_{MODE}.json'
-    top10_snps = snp_ranking[:10]
-    top10_snps = [snp_col_names[i] for i in top10_snps]
-    with open(snp_path, 'w') as file: json.dump(top10_snps, file)
+    top_snps = snp_ranking
+    top_snps = [snp_col_names[i] for i in top_snps]
+    with open(snp_path, 'w') as file: json.dump(top_snps, file)
     print(f'Saved Top SNPs to {snp_path}')
+    return
+
+def save_top_clinical(clinical_ranking, clinical_col_names, model_save_path):
+    extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
+    MODE = extract_mode(model_save_path)
+    clinical_path = f'../reports/saliency_clinical_{MODE}.json'
+    top_clinical = clinical_ranking
+    top_clinical = [clinical_col_names[i] for i in top_clinical]
+    with open(clinical_path, 'w') as file: json.dump(top_clinical, file)
+    print(f'Saved Top Clinical Features to {clinical_path}')
     return
 
 
 def visualize_attention_weights(attention_weights, title):
     """
-    Assumes attention_weights is a list of numpy arrays
+    Visualizes the given attention weights.
+    NOTE: Assumes attention_weights is a list of numpy arrays
     """
 
     # Loop through modalities
@@ -547,6 +571,7 @@ def visualize_attention_weights(attention_weights, title):
         plt.ylabel('Heads')
         plt.show()
 
+
 def visualize_some_saliency(test_img, saliency_maps, save_path):
     for mri_index_now in range(24):
         extract_mode = lambda s: re.search(r'model_(.*?)\.h5', s).group(1)
@@ -557,16 +582,12 @@ def visualize_some_saliency(test_img, saliency_maps, save_path):
 
 def plot_mri_with_heatmaps(mri_images, heatmaps, save_path):
     """
-    Plots MRI images and the same images with normalized heatmaps overlay.
-
-    Args:
-    mri_images: (72, 72, 3) numpy array representing the MRI images (3 slices).
-    heatmaps: (72, 72, 3) numpy array representing the importance scores (3 heatmaps).
-    save_path: Path where the combined figure will be saved.
+    Plots MRI images and the same images with normalized heatmap (saliency map) overlay.
     """
+
     if mri_images.shape != (72, 72, 3) or heatmaps.shape != (72, 72, 3):
         raise ValueError("Both mri_images and heatmaps must be of shape (72, 72, 3)")
-
+    
     plt.figure(figsize=(12, 18))
     slice_names = ["Sagittal", "Axial", "Coronal"]
 
@@ -604,50 +625,9 @@ def plot_mri_with_heatmaps(mri_images, heatmaps, save_path):
 
 
 
-# def compute_multi_modal_saliency_maps(model, inputs):
-#     """
-#     Compute saliency maps for all inputs in a multi-modal model without specifying a class index.
-
-#     Args:
-#     model: The trained multi-modal model.
-#     inputs: List of inputs corresponding to each modality (clinical, snp, mri).
-#             These can be numpy arrays or tf.Tensors.
-
-#     Returns:
-#     List of numpy arrays: The computed saliency maps for each modality.
-#     """
-#     # Convert inputs to tf.float32 tensors if they are not already
-#     tensor_inputs = [tf.cast(tf.convert_to_tensor(input_data), tf.float32) for input_data in inputs]
-
-#     with tf.GradientTape() as tape:
-#         # Watch the tensor inputs
-#         tape.watch(tensor_inputs)
-#         predictions = model(tensor_inputs)
-#         # Use the model's output (e.g., the logits or probabilities) for gradient computation
-#         loss = tf.reduce_sum(predictions)  # Sums up the outputs for gradient calculation
-
-#     gradients = tape.gradient(loss, tensor_inputs)
-
-#     # Check if gradients are computed successfully
-#     if any(grad is None for grad in gradients):
-#         raise ValueError("Gradient computation failed. Check if the model and inputs are compatible.")
-
-#     saliency_maps = [tf.abs(grad).numpy() for grad in gradients]
-#     return saliency_maps
-
-
 def compute_multi_modal_saliency_maps(model, inputs, target):
     """
-    Compute saliency maps for all inputs in a multi-modal model with a specified target.
-
-    Args:
-    model: The trained multi-modal model.
-    inputs: List of inputs corresponding to each modality (clinical, snp, mri).
-            These can be numpy arrays or tf.Tensors.
-    target: The target tensor for computing loss (class labels).
-
-    Returns:
-    List of numpy arrays: The computed saliency maps for each modality.
+    Computes saliency maps for all inputs with a specified target.
     """
     tensor_inputs = [tf.cast(tf.convert_to_tensor(input_data), tf.float32) for input_data in inputs]
     tensor_target = tf.cast(tf.convert_to_tensor(target), tf.float32)
@@ -671,13 +651,9 @@ def compute_multi_modal_saliency_maps(model, inputs, target):
 
 def rank_snps_by_importance(saliency_scores):
     """
-    Rank SNPs based on their importance using mean reciprocal rank.
+    Ranks SNPs based on their importance using MRR.
 
-    Args:
-    saliency_scores (numpy.ndarray): A 2D array of shape (num_inputs, num_snps) containing saliency scores.
-
-    Returns:
-    numpy.ndarray: A 1D array of SNP indices ranked by their importance.
+    NOTE: we can use this same function for the clinical data, too!
     """
     num_inputs, num_snps = saliency_scores.shape
 
@@ -698,44 +674,32 @@ def rank_snps_by_importance(saliency_scores):
     return ranked_snps
 
 
-def maximize_multi_modal_activation(model, target_layer, input_shapes, iterations=30, step=1.0):
+def maximize_class_activation(model, target_class, input_shapes, iterations=100, step=1.0):
     """
-    Generate inputs for each modality that maximize the activation of a specified layer in a multi-modal model.
-
-    Args:
-    model: The trained multi-modal model.
-    target_layer: The name of the layer to be maximized.
-    input_shapes: List of shapes for each modality input.
-    iterations: Number of gradient ascent steps.
-    step: Step size for gradient ascent.
-
-    Returns:
-    List of numpy arrays: The generated inputs for each modality.
+    Generates inputs for each modality that maximize the activation for a specific class
     """
     # Initialize random inputs for each modality
     input_data = [tf.random.uniform((1, *shape), 0, 1) for shape in input_shapes]
 
-    # Retrieve the symbolic output of the target layer
-    layer_output = model.get_layer(target_layer).output
-
     for _ in range(iterations):
         with tf.GradientTape() as tape:
             tape.watch(input_data)
+            # Pass the input data through the model
             model_output = model(input_data)
-            # Target the activation of the specific layer
-            activation = tf.reduce_mean(model_output[layer_output])
 
-        # Compute gradients for each modality
-        grads = tape.gradient(activation, input_data)
+            # Focus on the activation of the target class in the final output
+            target_class_activation = model_output[:, target_class]
+
+        # Compute gradients with respect to the target class activation
+        grads = tape.gradient(target_class_activation, input_data)
 
         # Update each modality input with normalized gradients
         for i in range(len(input_data)):
             normalized_grads = grads[i] / (tf.sqrt(tf.reduce_mean(tf.square(grads[i]))) + 1e-5)
             input_data[i] += step * normalized_grads
 
-    # Decode the resulting input data for each modality
-    maximized_activation_inputs = [data.numpy()[0] for data in input_data]
-    return maximized_activation_inputs
+    # Return the optimized inputs
+    return [data.numpy()[0] for data in input_data]
 
 
 
