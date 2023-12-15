@@ -4,4 +4,5 @@ ADNI/**
 ADNI_Label_Matching/**
 logs/**
 checkpoints/**
-reports/**
+reports1/**
+training1/**
